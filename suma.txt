@@ -1,0 +1,89 @@
+#include <windows.h>
+#include <winioctl.h>
+#include <string>
+#include <vector>
+#include <iostream>
+
+#define IDENTIFY_BUFFER_SIZE 512
+#define ATA_SETPASSWORD 0xF1
+#define ATA_SEC_ERASE   0xF4
+#define ATA_IDENTIFY    0xEC
+
+bool securityErase(HANDLE hDevice) {
+    DWORD bytesReturned;
+    BYTE identifyBuf[IDENTIFY_BUFFER_SIZE] = {0};
+
+    ATA_PASS_THROUGH_EX_WITH_BUFFERS apt = {0};
+    apt.Apt.Length = sizeof(ATA_PASS_THROUGH_EX);
+    apt.Apt.AtaFlags = ATA_FLAGS_DATA_IN;
+    apt.Apt.DataTransferLength = IDENTIFY_BUFFER_SIZE;
+    apt.Apt.TimeOutValue = 5;
+    apt.Apt.DataBufferOffset = offsetof(ATA_PASS_THROUGH_EX_WITH_BUFFERS, DataBuffer);
+
+    apt.Apt.CurrentTaskFile[6] = ATA_IDENTIFY; // IDENTIFY command
+
+    if (!DeviceIoControl(hDevice,
+                         IOCTL_ATA_PASS_THROUGH,
+                         &apt, sizeof(apt),
+                         &apt, sizeof(apt),
+                         &bytesReturned, NULL)) {
+        std::cerr << "[-] IDENTIFY failed, cannot check security state\n";
+        return false;
+    }
+
+    memcpy(identifyBuf, apt.DataBuffer, IDENTIFY_BUFFER_SIZE);
+
+    // Word 128 = Security status
+    bool frozen = identifyBuf[256] & 0x02;
+    if (frozen) {
+        std::cerr << "[-] Drive is in FROZEN state – erase not possible.\n";
+        return false;
+    }
+
+    // Build 512-byte password buffer (must be User password, 32 bytes)
+    BYTE passwordBuf[512] = {0};
+    passwordBuf[0] = 0x01; // User password
+    std::string pwd = "EraseDrive"; 
+    memcpy(passwordBuf + 2, pwd.c_str(), min((int)pwd.size(), 32));
+
+    // Send SET PASSWORD
+    ATA_PASS_THROUGH_EX_WITH_BUFFERS setPwd = {0};
+    setPwd.Apt.Length = sizeof(ATA_PASS_THROUGH_EX);
+    setPwd.Apt.AtaFlags = ATA_FLAGS_DATA_OUT;
+    setPwd.Apt.DataTransferLength = sizeof(passwordBuf);
+    setPwd.Apt.TimeOutValue = 5;
+    setPwd.Apt.DataBufferOffset = offsetof(ATA_PASS_THROUGH_EX_WITH_BUFFERS, DataBuffer);
+    setPwd.Apt.CurrentTaskFile[6] = ATA_SETPASSWORD;
+    memcpy(setPwd.DataBuffer, passwordBuf, sizeof(passwordBuf));
+
+    if (!DeviceIoControl(hDevice,
+                         IOCTL_ATA_PASS_THROUGH,
+                         &setPwd, sizeof(setPwd),
+                         &setPwd, sizeof(setPwd),
+                         &bytesReturned, NULL)) {
+        std::cerr << "[-] SET PASSWORD failed\n";
+        return false;
+    }
+
+    // Send SECURITY ERASE UNIT
+    ATA_PASS_THROUGH_EX_WITH_BUFFERS erase = {0};
+    erase.Apt.Length = sizeof(ATA_PASS_THROUGH_EX);
+    erase.Apt.AtaFlags = ATA_FLAGS_DATA_OUT;
+    erase.Apt.DataTransferLength = sizeof(passwordBuf);
+    erase.Apt.TimeOutValue = 600; // some drives take minutes
+    erase.Apt.DataBufferOffset = offsetof(ATA_PASS_THROUGH_EX_WITH_BUFFERS, DataBuffer);
+    erase.Apt.CurrentTaskFile[6] = ATA_SEC_ERASE;
+    memcpy(erase.DataBuffer, passwordBuf, sizeof(passwordBuf));
+
+    if (!DeviceIoControl(hDevice,
+                         IOCTL_ATA_PASS_THROUGH,
+                         &erase, sizeof(erase),
+                         &erase, sizeof(erase),
+                         &bytesReturned, NULL)) {
+        std::cerr << "[-] SECURITY ERASE UNIT failed\n";
+        return false;
+    }
+
+    std::cout << "[+] Secure Erase command sent successfully\n";
+    return true;
+}

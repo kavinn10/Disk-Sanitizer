@@ -1,0 +1,2 @@
+QT- https://web.stanford.edu/dept/cs_edu/resources/qt/install-windows
+C:\Qt\6.9.2\mingw_64\bin\windeployqt.exe --release --compiler-runtime "D:\Projects\Data Sanitization\windows\build\Desktop_Qt_6_9_2_MinGW_64_bit-Debug\debug\DriveSanitizerPhase1.exe"
